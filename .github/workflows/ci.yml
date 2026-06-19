@@ -1,0 +1,65 @@
+name: Task Manager CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# Menghilangkan warning kedaluwarsa Node.js di server runner GitHub Actions 2026
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-and-qa:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 2. Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13" # Disesuaikan dengan versi lokal sistem runtime (3.13.7)
+          cache: 'pip'          # Mengoptimasi waktu build menggunakan pip caching
+
+      - name: 3. Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install flask flask-sqlalchemy flask-wtf pytest pytest-cov flake8
+
+      - name: 4. Code Quality Gate (Strict Linting)
+        run: |
+          # Pipa akan langsung gagal (gagal gerbang otomatis) jika ditemukan error sintaks kritis
+          python -m flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Memeriksa kerapian kode secara umum tanpa menghentikan paksa pipa rilis
+          python -m flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+
+      - name: 5. Execute Tests with Coverage
+        run: |
+          # Jalankan pytest dengan flag pencarian modul lokal dan luaran berkas XML
+          python -m pytest --cov=. --cov-report=xml --cov-report=term
+
+      - name: 6. Enforce Coverage Quality Gate (Min 80%)
+        run: |
+          python - << 'PY'
+          import xml.etree.ElementTree as ET
+          import sys
+
+          try:
+              tree = ET.parse('coverage.xml')
+              root = tree.getroot()
+              valid = int(root.get('lines-valid', '0'))
+              covered = int(root.get('lines-covered', '0'))
+              pct = (covered / valid) * 100 if valid else 0
+              print(f"=== PIPELINE QUALITY GATE REPORT ===")
+              print(f"Hasil Evaluasi Cakupan Kode: {pct:.2f}%")
+              
+              # Aturan ambang batas minimal 80%
+              assert pct >= 80, f"Quality Gate FAILED: Cakupan kode ({pct:.2f}%) di bawah batas minimum 80%!"
+              print("Quality Gate PASSED: Kode aman untuk dideploy. ✅")
+          except AssertionError as e:
+              print(f"Error: {e} ❌")
+              sys.exit(1) # Memaksa GitHub Actions memberikan status Merah (Failed)
+          PY
